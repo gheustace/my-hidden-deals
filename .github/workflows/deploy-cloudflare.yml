@@ -1,0 +1,36 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    
+    name: Deploy to Cloudflare Pages
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: my-hidden-deals
+          directory: .
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Deployment Summary
+        run: |
+          echo "✅ Deployed to Cloudflare Pages successfully!"
+          echo "🌐 Production URL: https://mydeals.aone1.ai"
+          echo "📝 Preview URL available in Pages dashboard"
+
