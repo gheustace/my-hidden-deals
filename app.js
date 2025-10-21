@@ -244,30 +244,35 @@ async function handleConnectedPage(grantId) {
     await sleep(500);
     
     try {
-        // Trigger promo scan
+        // Trigger backfill
         updateLoadingText('Scanning your inbox for deals...');
-        const scanResponse = await fetch(`${API_BASE_URL}/api/promos/scan`, {
+        
+        // Calculate date range (last 90 days)
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - 90);
+        
+        const backfillResponse = await fetch(`${API_BASE_URL}/admin/backfill`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                grantId: grantId
+                user_id: grantId,
+                tenant_id: '00000000-0000-0000-0000-000000000000',
+                start_date: startDate.toISOString().split('T')[0],
+                end_date: endDate.toISOString().split('T')[0],
+                batch_size: 50
             })
         });
         
-        if (!scanResponse.ok) {
-            throw new Error('Failed to start scan');
+        if (!backfillResponse.ok) {
+            throw new Error('Failed to start backfill');
         }
         
-        const scanData = await scanResponse.json();
-        const jobId = scanData.jobId;
-        
-        if (jobId) {
-            // Poll for scan completion
-            updateLoadingText('Analyzing promotions...');
-            await pollScanStatus(jobId);
-        }
+        // Poll for promotions to fill
+        updateLoadingText('Analyzing promotions...');
+        await pollPromotions(grantId);
         
         // Load promos
         updateLoadingText('Loading your deals...');
@@ -282,31 +287,51 @@ async function handleConnectedPage(grantId) {
     }
 }
 
-async function pollScanStatus(jobId, maxAttempts = 30) {
+async function pollPromotions(userId, maxAttempts = 60) {
+    let previousCount = 0;
+    let stableCount = 0;
+    
     for (let i = 0; i < maxAttempts; i++) {
         try {
-            const response = await fetch(`${API_BASE_URL}/api/promos/scan/${jobId}`);
+            const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}/artifacts/promotions`);
             if (response.ok) {
                 const data = await response.json();
-                if (data.status === 'done' || data.status === 'completed') {
-                    return;
+                const currentCount = Array.isArray(data) ? data.length : (data.promotions ? data.promotions.length : 0);
+                
+                // Check if count has stabilized
+                if (currentCount === previousCount && currentCount > 0) {
+                    stableCount++;
+                    // If count is stable for 3 consecutive checks, we're done
+                    if (stableCount >= 3) {
+                        return;
+                    }
+                } else {
+                    stableCount = 0;
+                }
+                
+                previousCount = currentCount;
+                
+                // Update loading text with progress
+                if (currentCount > 0) {
+                    updateLoadingText(`Found ${currentCount} promotions...`);
                 }
             }
         } catch (error) {
             console.warn('Poll attempt failed:', error);
         }
-        await sleep(2000); // Wait 2 seconds between polls
+        await sleep(3000); // Wait 3 seconds between polls
     }
 }
 
-async function loadPromos(grantId) {
-    const response = await fetch(`${API_BASE_URL}/api/promos?grantId=${grantId}&limit=50&offset=0`);
+async function loadPromos(userId) {
+    const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}/artifacts/promotions`);
     
     if (!response.ok) {
         throw new Error('Failed to load promos');
     }
     
-    const promos = await response.json();
+    const data = await response.json();
+    const promos = Array.isArray(data) ? data : (data.promotions || []);
     
     // Transform API data to our format
     allDeals = promos.map((promo, index) => ({
