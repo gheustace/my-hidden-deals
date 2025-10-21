@@ -1,6 +1,6 @@
 # Cloudflare Pages configuration
 name = "my-hidden-deals"
-compatibility_date = "2024-01-01"
+compatibility_date = "2025-01-01"
 
 [site]
 bucket = "."

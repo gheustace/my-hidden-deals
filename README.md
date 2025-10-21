@@ -70,7 +70,7 @@ Body: {
   "user_id": "grant-id-from-oauth",
   "tenant_id": "00000000-0000-0000-0000-000000000000",
   "start_date": "2024-10-01",
-  "end_date": "2024-10-21",
+  "end_date": "2025-10-21",
   "batch_size": 50
 }
 Response: { success: true }
