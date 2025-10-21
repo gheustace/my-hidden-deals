@@ -1,4 +1,3 @@
 # Cloudflare/Netlify redirects
-/connected /connected.html 200
-/connected.html /connected.html 200
+# Handled by connected file instead
 
