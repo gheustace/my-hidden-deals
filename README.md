@@ -63,28 +63,29 @@ Body: {
 Response: { "authUrl": "https://..." }
 ```
 
-### 2. Trigger Promo Scan
+### 2. Trigger Backfill (Scan Inbox)
 ```
-POST /api/promos/scan
-Body: { "grantId": "grant-id-from-oauth" }
-Response: { "jobId": "job-123" }
+POST /admin/backfill
+Body: {
+  "user_id": "grant-id-from-oauth",
+  "tenant_id": "00000000-0000-0000-0000-000000000000",
+  "start_date": "2024-10-01",
+  "end_date": "2024-10-21",
+  "batch_size": 50
+}
+Response: { success: true }
 ```
 
-### 3. Check Scan Status (Optional Polling)
+### 3. Poll for Promotions (Wait for Backfill to Complete)
 ```
-GET /api/promos/scan/{jobId}
-Response: { "status": "done" | "processing" | "failed" }
-```
-
-### 4. Fetch Promos
-```
-GET /api/promos?grantId={grantId}&limit=50&offset=0
-Response: Array of promo objects
+GET /api/v1/users/{user_id}/artifacts/promotions
+Response: Array of promotion artifacts
+Note: Poll this endpoint until the count stabilizes (promotions done filling)
 ```
 
 ## Expected API Data Format
 
-The `/api/promos` endpoint should return deals in this format:
+The `/api/v1/users/{user_id}/artifacts/promotions` endpoint returns promotion artifacts:
 
 ```javascript
 [
@@ -97,10 +98,12 @@ The `/api/promos` endpoint should return deals in this format:
     discount: string,       // e.g., "20%" or "$50"
     expiry: string,         // ISO date string
     ctaLink: string,        // link to original email/offer
-    // ... other fields
+    // ... other artifact fields
   }
 ]
 ```
+
+The frontend polls this endpoint until the promotion count stabilizes, indicating backfill is complete.
 
 ## Customization
 
