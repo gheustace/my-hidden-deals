@@ -1,5 +1,12 @@
 // API Configuration
 const API_BASE_URL = 'https://staging.aone1.ai';
+const APP_VERSION = 'v2.0-CORRECT-ENDPOINTS';
+
+// Log version on load
+console.log('%c🚀 My Hidden Deals ' + APP_VERSION, 'color: #10b981; font-size: 16px; font-weight: bold;');
+console.log('API Base:', API_BASE_URL);
+console.log('Backfill endpoint: /admin/backfill');
+console.log('Promotions endpoint: /api/v1/users/{id}/artifacts/promotions');
 
 // State management
 let currentEmail = '';
