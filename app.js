@@ -338,21 +338,38 @@ async function loadPromos(userId) {
     }
     
     const data = await response.json();
-    const promos = Array.isArray(data) ? data : (data.promotions || []);
+    console.log('📦 Raw API response:', data);
+    
+    const promos = data.promotions || [];
+    console.log(`✅ Found ${promos.length} promotions`);
     
     // Transform API data to our format
-    allDeals = promos.map((promo, index) => ({
-        id: promo.id || index,
-        merchant: promo.brand || promo.merchant || 'Unknown',
-        category: categorizePromo(promo),
-        title: promo.subject || promo.title || 'Special Offer',
-        description: promo.description || extractDescription(promo),
-        code: promo.code || promo.couponCode || 'N/A',
-        value: promo.discount || 'See Details',
-        expiryDate: promo.expiry ? new Date(promo.expiry) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        discount: promo.discount || 'Special offer',
-        ctaLink: promo.ctaLink || promo.link || '#'
-    }));
+    allDeals = promos.map((promo, index) => {
+        // Build discount display text
+        let discountText = 'Special Offer';
+        if (promo.discount_percentage) {
+            discountText = `${promo.discount_percentage}% off`;
+        } else if (promo.discount_amount) {
+            discountText = `$${promo.discount_amount} off`;
+        } else if (promo.promotion_type) {
+            discountText = promo.promotion_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+        
+        return {
+            id: promo.id || index,
+            merchant: promo.brand_name || 'Unknown Merchant',
+            category: categorizePromo(promo),
+            title: promo.headline || promo.email_subject || 'Special Offer',
+            description: promo.description || promo.email_subject || 'Check your email for details',
+            code: null, // No code in API response
+            value: promo.discount_percentage ? `${promo.discount_percentage}% off` : 'See Details',
+            expiryDate: promo.valid_until ? new Date(promo.valid_until) : null,
+            discount: discountText,
+            ctaLink: null, // No direct link in API
+            urgencyLevel: promo.urgency_level || 'low',
+            emailId: promo.email_id
+        };
+    });
     
     // If no promos found, show message
     if (allDeals.length === 0) {
@@ -365,19 +382,20 @@ async function loadPromos(userId) {
 }
 
 function categorizePromo(promo) {
-    const brand = (promo.brand || promo.merchant || '').toLowerCase();
-    const subject = (promo.subject || '').toLowerCase();
+    const brand = (promo.brand_name || '').toLowerCase();
+    const subject = (promo.email_subject || promo.headline || '').toLowerCase();
     const text = `${brand} ${subject}`;
     
-    if (text.match(/travel|hotel|flight|airbnb|booking/)) return 'travel';
-    if (text.match(/food|restaurant|uber eats|doordash|grubhub|delivery/)) return 'food';
-    if (text.match(/amazon|target|walmart|shop|store|retail/)) return 'retail';
+    if (text.match(/travel|hotel|flight|airbnb|booking|vacation|priceline|air canada/)) return 'travel';
+    if (text.match(/food|restaurant|uber|doordash|grubhub|delivery|philz|eats/)) return 'food';
+    if (text.match(/amazon|target|walmart|shop|store|retail|lenscrafters|walgreens|oakley/)) return 'retail';
     return 'services';
 }
 
 function extractDescription(promo) {
-    if (promo.description) return promo.description;
-    if (promo.subject) return promo.subject;
+    if (promo.description && promo.description !== 'null') return promo.description;
+    if (promo.email_subject) return promo.email_subject;
+    if (promo.headline) return promo.headline;
     return 'Exclusive offer just for you';
 }
 
@@ -530,21 +548,22 @@ function displayDeals() {
 }
 
 function createDealCard(deal) {
-    const daysUntilExpiry = getDaysUntilExpiry(deal.expiryDate);
-    const isExpiringSoon = daysUntilExpiry <= 7;
-    const expiryClass = daysUntilExpiry <= 3 ? 'danger' : (daysUntilExpiry <= 7 ? 'warning' : '');
+    const daysUntilExpiry = deal.expiryDate ? getDaysUntilExpiry(deal.expiryDate) : null;
+    const isExpiringSoon = daysUntilExpiry && daysUntilExpiry <= 7;
+    const expiryClass = daysUntilExpiry && daysUntilExpiry <= 3 ? 'danger' : (daysUntilExpiry && daysUntilExpiry <= 7 ? 'warning' : '');
     const hasCode = deal.code && deal.code !== 'N/A';
     const hasLink = deal.ctaLink && deal.ctaLink !== '#';
+    const isHighUrgency = deal.urgencyLevel === 'high';
     
     return `
-        <div class="deal-card ${isExpiringSoon ? 'expiring-soon' : ''}">
-            ${isExpiringSoon ? `
+        <div class="deal-card ${isExpiringSoon || isHighUrgency ? 'expiring-soon' : ''}">
+            ${isExpiringSoon || isHighUrgency ? `
                 <div class="expiring-badge">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="10"></circle>
                         <polyline points="12 6 12 12 16 14"></polyline>
                     </svg>
-                    Expiring Soon
+                    ${isHighUrgency ? 'High Priority' : 'Expiring Soon'}
                 </div>
             ` : ''}
             <div class="deal-header">
@@ -566,6 +585,7 @@ function createDealCard(deal) {
                         </svg>
                         <span>Save: ${deal.discount}</span>
                     </div>
+                    ${daysUntilExpiry ? `
                     <div class="deal-detail">
                         <svg class="deal-detail-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -575,6 +595,7 @@ function createDealCard(deal) {
                         </svg>
                         <span>Expires in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'day' : 'days'}</span>
                     </div>
+                    ` : ''}
                 </div>
                 ${hasCode ? `
                     <div class="deal-code" title="Click to copy" data-code="${deal.code}">
@@ -597,9 +618,11 @@ function createDealCard(deal) {
                 ` : ''}
             </div>
             <div class="deal-footer">
+                ${deal.expiryDate ? `
                 <div class="deal-expiry ${expiryClass}">
                     ${formatExpiryDate(deal.expiryDate)}
                 </div>
+                ` : '<div class="deal-expiry">No expiration</div>'}
                 <div class="deal-value">${deal.value}</div>
             </div>
         </div>
