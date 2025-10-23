@@ -1,6 +1,6 @@
 // API Configuration
 const API_BASE_URL = 'https://staging.aone1.ai';
-const APP_VERSION = 'v4.2-REUSE-BACKFILL';
+const APP_VERSION = 'v4.3-AUTO-REFRESH-PROMOS';
 
 // Log version on load
 console.log('%c🚀 My Hidden Deals ' + APP_VERSION, 'color: #10b981; font-size: 16px; font-weight: bold;');
@@ -14,6 +14,7 @@ console.log('💡 Backfill requests are cached in localStorage to prevent duplic
 let currentEmail = '';
 let currentGrantId = '';
 let isProcessing = false;
+let promotionPollingInterval = null;
 
 // Check if we're on the connected page on load
 document.addEventListener('DOMContentLoaded', () => {
@@ -240,6 +241,7 @@ function initializeLogoutButton() {
         // Add click listener
         newBtn.addEventListener('click', () => {
             console.log('Logout button clicked - returning to landing page');
+            stopPromotionPolling(); // Stop polling before navigating away
             currentEmail = '';
             currentGrantId = '';
             allDeals = [];
@@ -359,6 +361,9 @@ async function handleConnectedPage(grantId) {
         updateLoadingText('Loading your deals...');
         await loadPromos(grantId);
         
+        // Start continuous polling for new promotions
+        startPromotionPolling(grantId);
+        
         // Clear the stored request_id after successful completion
         localStorage.removeItem(storageKey);
         
@@ -368,6 +373,121 @@ async function handleConnectedPage(grantId) {
         setTimeout(() => {
             window.location.href = '/';
         }, 3000);
+    }
+}
+
+// Start polling for new promotions every 20 seconds
+function startPromotionPolling(userId) {
+    // Clear any existing interval
+    if (promotionPollingInterval) {
+        clearInterval(promotionPollingInterval);
+    }
+    
+    console.log('🔄 Starting continuous promotion polling (every 20 seconds)');
+    
+    promotionPollingInterval = setInterval(async () => {
+        try {
+            await refreshPromotions(userId);
+        } catch (error) {
+            console.warn('Error refreshing promotions:', error);
+        }
+    }, 20000); // Poll every 20 seconds
+}
+
+// Stop polling when leaving the page
+function stopPromotionPolling() {
+    if (promotionPollingInterval) {
+        console.log('⏸️ Stopping promotion polling');
+        clearInterval(promotionPollingInterval);
+        promotionPollingInterval = null;
+    }
+}
+
+// Refresh promotions without reloading the page
+async function refreshPromotions(userId) {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}/artifacts/promotions`);
+        
+        if (!response.ok) {
+            console.warn('Failed to refresh promotions');
+            return;
+        }
+        
+        const data = await response.json();
+        const promos = data.promotions || [];
+        const currentCount = allDeals.length;
+        const newCount = promos.length;
+        
+        console.log(`🔄 Promotion refresh: ${currentCount} → ${newCount}`);
+        
+        // If we have new promotions, update the display
+        if (newCount > currentCount) {
+            const newDealsCount = newCount - currentCount;
+            console.log(`✨ Found ${newDealsCount} new promotions!`);
+            
+            // Re-transform all promotions
+            allDeals = promos.map((promo, index) => {
+                const brand = promo.sale?.brand || promo.discounts?.[0]?.brand || 'Unknown Merchant';
+                const firstDiscount = promo.discounts?.[0];
+                let discountText = 'Special Offer';
+                let valueText = 'See Details';
+                let promoCode = null;
+                
+                if (firstDiscount) {
+                    if (firstDiscount.reduction_type === 'Percentage' && firstDiscount.reduction_value) {
+                        const percent = firstDiscount.reduction_value;
+                        discountText = `${percent}% off`;
+                        valueText = `${percent}% off`;
+                    } else if (firstDiscount.reduction_type === 'Amount' && firstDiscount.reduction_value) {
+                        const amount = Math.round(firstDiscount.reduction_value * 100) / 100;
+                        discountText = `$${amount} off`;
+                        valueText = `$${amount}`;
+                    } else if (firstDiscount.reduction_type === 'Percentage' && !firstDiscount.reduction_value) {
+                        discountText = 'Discount Available';
+                        valueText = 'See Details';
+                    }
+                    promoCode = firstDiscount.promo_code || null;
+                }
+                
+                if (discountText === 'Special Offer' && promo.sale?.type) {
+                    discountText = promo.sale.type.replace(/_/g, ' ');
+                }
+                
+                const description = promo.sale?.description || promo.email_subject || 'Check your email for details';
+                let expiryDate = null;
+                if (firstDiscount?.valid_until) {
+                    expiryDate = new Date(firstDiscount.valid_until);
+                }
+                
+                const emailLink = promo.email_id 
+                    ? `${API_BASE_URL}/api/v1/users/${userId}/emails/${promo.email_id}` 
+                    : null;
+                
+                return {
+                    id: promo.id || index,
+                    merchant: brand,
+                    category: categorizePromo({ brand_name: brand, email_subject: promo.email_subject }),
+                    title: promo.email_subject || 'Special Offer',
+                    description: description,
+                    code: promoCode,
+                    value: valueText,
+                    expiryDate: expiryDate,
+                    discount: discountText,
+                    ctaLink: emailLink,
+                    urgencyLevel: 'low',
+                    emailId: promo.email_id
+                };
+            });
+            
+            // Update display
+            updateSummary();
+            displayDeals();
+            
+            // Show notification
+            showNewDealsNotification(newDealsCount);
+        }
+    } catch (error) {
+        console.warn('Error in refreshPromotions:', error);
     }
 }
 
@@ -845,6 +965,38 @@ function showCopiedNotification() {
     }, 3000);
 }
 
+function showNewDealsNotification(count) {
+    const notification = document.createElement('div');
+    notification.className = 'new-deals-notification';
+    notification.innerHTML = `
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+            <path d="M2 17l10 5 10-5"></path>
+            <path d="M2 12l10 5 10-5"></path>
+        </svg>
+        <span>${count} new ${count === 1 ? 'deal' : 'deals'} found!</span>
+    `;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 4000);
+}
+
 // Initialize
 console.log('My Hidden Deals - Ready to discover your savings!');
+
+// Clean up polling when page is hidden or unloaded
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopPromotionPolling();
+    } else if (currentGrantId && pages.results.classList.contains('active')) {
+        // Restart polling if we come back to the results page
+        startPromotionPolling(currentGrantId);
+    }
+});
+
+window.addEventListener('beforeunload', () => {
+    stopPromotionPolling();
+});
 
