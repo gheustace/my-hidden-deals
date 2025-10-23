@@ -1,6 +1,6 @@
 // API Configuration
 const API_BASE_URL = 'https://staging.aone1.ai';
-const APP_VERSION = 'v4.3-AUTO-REFRESH-PROMOS';
+const APP_VERSION = 'v4.4-PREMIUM-HEADER';
 
 // Log version on load
 console.log('%c🚀 My Hidden Deals ' + APP_VERSION, 'color: #10b981; font-size: 16px; font-weight: bold;');
@@ -257,6 +257,26 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeLogoutButton);
 } else {
     initializeLogoutButton();
+}
+
+// Make logo clickable to reload deals
+function initializeLogo() {
+    const logoSmall = document.querySelector('.logo-small');
+    if (logoSmall) {
+        logoSmall.style.cursor = 'pointer';
+        logoSmall.addEventListener('click', () => {
+            if (currentGrantId) {
+                console.log('Logo clicked - refreshing deals');
+                refreshPromotions(currentGrantId);
+            }
+        });
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeLogo);
+} else {
+    initializeLogo();
 }
 
 // Handle connected page
@@ -764,6 +784,9 @@ function displayResults() {
     
     // Initialize logout button
     initializeLogoutButton();
+    
+    // Initialize logo click
+    initializeLogo();
     
     // Display deals
     displayDeals();
