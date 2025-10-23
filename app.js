@@ -1,12 +1,13 @@
 // API Configuration
 const API_BASE_URL = 'https://staging.aone1.ai';
-const APP_VERSION = 'v2.0-CORRECT-ENDPOINTS';
+const APP_VERSION = 'v4.1-30DAY-SCAN-PROD';
 
 // Log version on load
 console.log('%c🚀 My Hidden Deals ' + APP_VERSION, 'color: #10b981; font-size: 16px; font-weight: bold;');
 console.log('API Base:', API_BASE_URL);
-console.log('Backfill endpoint: /admin/backfill');
-console.log('Promotions endpoint: /api/v1/users/{id}/artifacts/promotions');
+console.log('Backfill endpoint: POST /admin/backfill → returns request_id');
+console.log('Progress endpoint: GET /admin/backfill/{request_id} → check is_complete');
+console.log('Promotions endpoint: GET /api/v1/users/{id}/artifacts/promotions');
 
 // State management
 let currentEmail = '';
@@ -227,14 +228,33 @@ document.getElementById('email-form').addEventListener('submit', async (e) => {
     }
 });
 
-// Logout/change email
-document.getElementById('logout-btn').addEventListener('click', () => {
-    currentEmail = '';
-    currentGrantId = '';
-    allDeals = [];
-    isProcessing = false;
-    window.location.href = '/';
-});
+// Logout/change email - Initialize on page load and when results are shown
+function initializeLogoutButton() {
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+        // Remove any existing listeners by cloning
+        const newBtn = logoutBtn.cloneNode(true);
+        logoutBtn.parentNode.replaceChild(newBtn, logoutBtn);
+        
+        // Add click listener
+        newBtn.addEventListener('click', () => {
+            console.log('Logout button clicked - returning to landing page');
+            currentEmail = '';
+            currentGrantId = '';
+            allDeals = [];
+            currentFilter = 'all';
+            isProcessing = false;
+            window.location.href = '/';
+        });
+    }
+}
+
+// Initialize logout button on page load
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeLogoutButton);
+} else {
+    initializeLogoutButton();
+}
 
 // Handle connected page
 async function handleConnectedPage(grantId) {
@@ -252,12 +272,12 @@ async function handleConnectedPage(grantId) {
     
     try {
         // Trigger backfill
-        updateLoadingText('Scanning your inbox for deals...');
+        updateLoadingText('Starting inbox scan...');
         
-        // Calculate date range (last 90 days)
+        // Calculate date range (last 30 days)
         const endDate = new Date();
         const startDate = new Date();
-        startDate.setDate(startDate.getDate() - 90);
+        startDate.setDate(startDate.getDate() - 30);
         
         const backfillResponse = await fetch(`${API_BASE_URL}/admin/backfill`, {
             method: 'POST',
@@ -274,12 +294,23 @@ async function handleConnectedPage(grantId) {
         });
         
         if (!backfillResponse.ok) {
+            const errorText = await backfillResponse.text();
+            console.error('Backfill failed:', errorText);
             throw new Error('Failed to start backfill');
         }
         
-        // Poll for promotions to fill
-        updateLoadingText('Analyzing promotions...');
-        await pollPromotions(grantId);
+        const backfillData = await backfillResponse.json();
+        const requestId = backfillData.request_id;
+        
+        if (!requestId) {
+            throw new Error('No request_id received from backfill');
+        }
+        
+        console.log(`✅ Backfill started with request_id: ${requestId}`);
+        
+        // Poll backfill progress
+        updateLoadingText('Scanning your inbox for deals...');
+        await pollBackfillProgress(requestId);
         
         // Load promos
         updateLoadingText('Loading your deals...');
@@ -294,40 +325,64 @@ async function handleConnectedPage(grantId) {
     }
 }
 
-async function pollPromotions(userId, maxAttempts = 60) {
-    let previousCount = 0;
-    let stableCount = 0;
+async function pollBackfillProgress(requestId, maxAttempts = 120) {
+    console.log(`🔄 Starting to poll backfill progress for request_id: ${requestId}`);
     
     for (let i = 0; i < maxAttempts; i++) {
         try {
-            const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}/artifacts/promotions`);
-            if (response.ok) {
-                const data = await response.json();
-                const currentCount = Array.isArray(data) ? data.length : (data.promotions ? data.promotions.length : 0);
-                
-                // Check if count has stabilized
-                if (currentCount === previousCount && currentCount > 0) {
-                    stableCount++;
-                    // If count is stable for 3 consecutive checks, we're done
-                    if (stableCount >= 3) {
-                        return;
-                    }
-                } else {
-                    stableCount = 0;
-                }
-                
-                previousCount = currentCount;
-                
-                // Update loading text with progress
-                if (currentCount > 0) {
-                    updateLoadingText(`Found ${currentCount} promotions...`);
-                }
+            const response = await fetch(`${API_BASE_URL}/admin/backfill/${requestId}`);
+            
+            if (!response.ok) {
+                console.warn(`Poll attempt ${i + 1} failed with status ${response.status}`);
+                await sleep(2000);
+                continue;
             }
+            
+            const data = await response.json();
+            console.log(`📊 Backfill progress (attempt ${i + 1}):`, data);
+            
+            // Update loading text with progress
+            if (data.processed_count !== undefined && data.total_count !== undefined) {
+                const percentage = data.total_count > 0 
+                    ? Math.round((data.processed_count / data.total_count) * 100) 
+                    : 0;
+                updateLoadingText(`Processing emails... ${data.processed_count} of ${data.total_count} (${percentage}%)`);
+            } else if (data.status) {
+                const statusCapitalized = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+                updateLoadingText(`${statusCapitalized}...`);
+            }
+            
+            // Check if complete
+            if (data.is_complete === true) {
+                console.log('✅ Backfill completed!');
+                if (data.promotions_count !== undefined) {
+                    updateLoadingText(`Found ${data.promotions_count} promotions!`);
+                } else {
+                    updateLoadingText('Backfill completed!');
+                }
+                await sleep(500);
+                return;
+            }
+            
+            // Check for errors
+            if (data.error || data.status === 'failed') {
+                throw new Error(data.error || 'Backfill failed');
+            }
+            
         } catch (error) {
-            console.warn('Poll attempt failed:', error);
+            console.warn(`Poll attempt ${i + 1} error:`, error);
+            // Continue polling unless it's a critical error
+            if (error.message.includes('Backfill failed')) {
+                throw error;
+            }
         }
-        await sleep(3000); // Wait 3 seconds between polls
+        
+        // Wait 2 seconds between polls
+        await sleep(2000);
     }
+    
+    // If we've exhausted all attempts, log warning but continue
+    console.warn('⚠️ Max polling attempts reached, proceeding to load promotions anyway');
 }
 
 async function loadPromos(userId) {
@@ -345,28 +400,65 @@ async function loadPromos(userId) {
     
     // Transform API data to our format
     allDeals = promos.map((promo, index) => {
-        // Build discount display text
+        // Get brand from sale or first discount
+        const brand = promo.sale?.brand || promo.discounts?.[0]?.brand || 'Unknown Merchant';
+        
+        // Get discount info from first discount in array
+        const firstDiscount = promo.discounts?.[0];
         let discountText = 'Special Offer';
-        if (promo.discount_percentage) {
-            discountText = `${promo.discount_percentage}% off`;
-        } else if (promo.discount_amount) {
-            discountText = `$${promo.discount_amount} off`;
-        } else if (promo.promotion_type) {
-            discountText = promo.promotion_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        let valueText = 'See Details';
+        let promoCode = null;
+        
+        if (firstDiscount) {
+            if (firstDiscount.reduction_type === 'Percentage' && firstDiscount.reduction_value) {
+                const percent = firstDiscount.reduction_value;
+                discountText = `${percent}% off`;
+                valueText = `${percent}% off`;
+            } else if (firstDiscount.reduction_type === 'Amount' && firstDiscount.reduction_value) {
+                const amount = Math.round(firstDiscount.reduction_value * 100) / 100; // Round to 2 decimals
+                discountText = `$${amount} off`;
+                valueText = `$${amount}`;
+            } else if (firstDiscount.reduction_type === 'Percentage' && !firstDiscount.reduction_value) {
+                // Percentage discount but no value specified
+                discountText = 'Discount Available';
+                valueText = 'See Details';
+            }
+            promoCode = firstDiscount.promo_code || null;
         }
+        
+        // Get sale type as fallback
+        if (discountText === 'Special Offer' && promo.sale?.type) {
+            discountText = promo.sale.type.replace(/_/g, ' ');
+        }
+        
+        // Get description
+        const description = promo.sale?.description || promo.email_subject || 'Check your email for details';
+        
+        // Get expiry date ONLY from discount valid_until (not sale dates!)
+        // Sale dates refer to when travel/event occurs, not when promotion expires
+        let expiryDate = null;
+        if (firstDiscount?.valid_until) {
+            expiryDate = new Date(firstDiscount.valid_until);
+        }
+        // Note: We intentionally don't use sale.end_date as it refers to event/travel dates
+        
+        // Build email link if email_id exists
+        const emailLink = promo.email_id 
+            ? `${API_BASE_URL}/api/v1/users/${userId}/emails/${promo.email_id}` 
+            : null;
         
         return {
             id: promo.id || index,
-            merchant: promo.brand_name || 'Unknown Merchant',
-            category: categorizePromo(promo),
-            title: promo.headline || promo.email_subject || 'Special Offer',
-            description: promo.description || promo.email_subject || 'Check your email for details',
-            code: null, // No code in API response
-            value: promo.discount_percentage ? `${promo.discount_percentage}% off` : 'See Details',
-            expiryDate: promo.valid_until ? new Date(promo.valid_until) : null,
+            merchant: brand,
+            category: categorizePromo({ brand_name: brand, email_subject: promo.email_subject }),
+            title: promo.email_subject || 'Special Offer',
+            description: description,
+            code: promoCode,
+            value: valueText,
+            expiryDate: expiryDate,
             discount: discountText,
-            ctaLink: null, // No direct link in API
-            urgencyLevel: promo.urgency_level || 'low',
+            ctaLink: emailLink,
+            urgencyLevel: 'low',
             emailId: promo.email_id
         };
     });
@@ -382,13 +474,20 @@ async function loadPromos(userId) {
 }
 
 function categorizePromo(promo) {
-    const brand = (promo.brand_name || '').toLowerCase();
+    const brand = (promo.brand_name || promo.brand || '').toLowerCase();
     const subject = (promo.email_subject || promo.headline || '').toLowerCase();
     const text = `${brand} ${subject}`;
     
-    if (text.match(/travel|hotel|flight|airbnb|booking|vacation|priceline|air canada/)) return 'travel';
-    if (text.match(/food|restaurant|uber|doordash|grubhub|delivery|philz|eats/)) return 'food';
-    if (text.match(/amazon|target|walmart|shop|store|retail|lenscrafters|walgreens|oakley/)) return 'retail';
+    // Travel: flights, hotels, car rentals, vacation bookings
+    if (text.match(/travel|hotel|flight|airbnb|booking|vacation|priceline|air canada|airline|flighthub|justfly|avis|united airlines|frontier|rental car/)) return 'travel';
+    
+    // Food & Dining: restaurants, delivery, coffee shops
+    if (text.match(/food|restaurant|uber eats|doordash|grubhub|delivery|philz|coffee|chevys|taco|sushi|sticks.*sushi|clif bar|dining/)) return 'food';
+    
+    // Retail: stores, apparel, furniture, fitness gear
+    if (text.match(/amazon|target|walmart|shop|store|retail|lenscrafters|walgreens|oakley|wayfair|diesel|fitness|yoga|apparel|furniture|xbox|gaming/)) return 'retail';
+    
+    // Services: everything else (subscriptions, finance, entertainment, etc.)
     return 'services';
 }
 
@@ -431,18 +530,34 @@ function updateLoadingText(text) {
     }
 }
 
-// Filter handling
-document.querySelectorAll('.filter-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        // Update active state
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+// Filter handling - Initialize on page load and when results are shown
+function initializeFilters() {
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        // Remove any existing listeners by cloning
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode.replaceChild(newBtn, btn);
         
-        // Apply filter
-        currentFilter = btn.dataset.filter;
-        displayDeals();
+        // Add click listener
+        newBtn.addEventListener('click', () => {
+            console.log(`Filter clicked: ${newBtn.dataset.filter}`);
+            
+            // Update active state
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            newBtn.classList.add('active');
+            
+            // Apply filter
+            currentFilter = newBtn.dataset.filter;
+            displayDeals();
+        });
     });
-});
+}
+
+// Initialize filters on page load
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeFilters);
+} else {
+    initializeFilters();
+}
 
 // Helper functions
 function showPage(pageName) {
@@ -452,19 +567,17 @@ function showPage(pageName) {
 
 async function simulateLoading() {
     const loadingText = document.getElementById('loading-text');
-    const progressFill = document.getElementById('progress-fill');
     
     const steps = [
-        { text: 'Connecting to your email...', progress: 20 },
-        { text: 'Scanning inbox for deals...', progress: 40 },
-        { text: 'Analyzing promotions...', progress: 60 },
-        { text: 'Filtering expired coupons...', progress: 80 },
-        { text: 'Organizing your deals...', progress: 100 }
+        'Connecting to your email...',
+        'Scanning inbox for deals...',
+        'Analyzing promotions...',
+        'Filtering expired coupons...',
+        'Organizing your deals...'
     ];
     
     for (const step of steps) {
-        loadingText.textContent = step.text;
-        progressFill.style.width = step.progress + '%';
+        loadingText.textContent = step;
         await sleep(600);
     }
 }
@@ -480,6 +593,12 @@ function displayResults() {
     // Update summary
     updateSummary();
     
+    // Initialize filter buttons
+    initializeFilters();
+    
+    // Initialize logout button
+    initializeLogoutButton();
+    
     // Display deals
     displayDeals();
 }
@@ -487,7 +606,10 @@ function displayResults() {
 function updateSummary() {
     const totalDeals = allDeals.length;
     const totalSavings = calculateTotalSavings();
-    const expiringSoon = allDeals.filter(deal => getDaysUntilExpiry(deal.expiryDate) <= 7).length;
+    const expiringSoon = allDeals.filter(deal => {
+        const days = getDaysUntilExpiry(deal.expiryDate);
+        return days !== null && days <= 7;
+    }).length;
     
     document.getElementById('total-deals').textContent = totalDeals;
     document.getElementById('total-savings').textContent = totalSavings;
@@ -515,7 +637,10 @@ function displayDeals() {
     
     if (currentFilter !== 'all') {
         if (currentFilter === 'expiring') {
-            filteredDeals = allDeals.filter(deal => getDaysUntilExpiry(deal.expiryDate) <= 7);
+            filteredDeals = allDeals.filter(deal => {
+                const days = getDaysUntilExpiry(deal.expiryDate);
+                return days !== null && days <= 7;
+            });
         } else {
             filteredDeals = allDeals.filter(deal => deal.category === currentFilter);
         }
@@ -608,12 +733,11 @@ function createDealCard(deal) {
                 ` : ''}
                 ${hasLink ? `
                     <a href="${deal.ctaLink}" target="_blank" rel="noopener noreferrer" class="deal-cta">
-                        View Deal
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                            <polyline points="15 3 21 3 21 9"></polyline>
-                            <line x1="10" y1="14" x2="21" y2="3"></line>
+                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                            <polyline points="22,6 12,13 2,6"></polyline>
                         </svg>
+                        View Original Email
                     </a>
                 ` : ''}
             </div>
@@ -630,8 +754,10 @@ function createDealCard(deal) {
 }
 
 function getDaysUntilExpiry(expiryDate) {
+    if (!expiryDate) return null;
     const now = new Date();
     const expiry = new Date(expiryDate);
+    if (isNaN(expiry.getTime())) return null;
     const diffTime = expiry - now;
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     return Math.max(0, diffDays);
