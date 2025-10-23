@@ -1,6 +1,6 @@
 // API Configuration
 const API_BASE_URL = 'https://staging.aone1.ai';
-const APP_VERSION = 'v4.1-30DAY-SCAN-PROD';
+const APP_VERSION = 'v4.2-NYLAS-EMAIL-LINKS';
 
 // Log version on load
 console.log('%c🚀 My Hidden Deals ' + APP_VERSION, 'color: #10b981; font-size: 16px; font-weight: bold;');
@@ -442,9 +442,9 @@ async function loadPromos(userId) {
         }
         // Note: We intentionally don't use sale.end_date as it refers to event/travel dates
         
-        // Build email link if email_id exists
+        // Build email link if email_id exists - use Nylas web app
         const emailLink = promo.email_id 
-            ? `${API_BASE_URL}/api/v1/users/${userId}/emails/${promo.email_id}` 
+            ? `https://app.nylas.com/mail/${userId}/thread/${promo.email_id}` 
             : null;
         
         return {
