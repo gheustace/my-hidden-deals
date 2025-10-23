@@ -1,6 +1,6 @@
 // API Configuration
 const API_BASE_URL = 'https://staging.aone1.ai';
-const APP_VERSION = 'v4.1-30DAY-SCAN-PROD';
+const APP_VERSION = 'v4.2-REUSE-BACKFILL';
 
 // Log version on load
 console.log('%c🚀 My Hidden Deals ' + APP_VERSION, 'color: #10b981; font-size: 16px; font-weight: bold;');
@@ -8,6 +8,7 @@ console.log('API Base:', API_BASE_URL);
 console.log('Backfill endpoint: POST /admin/backfill → returns request_id');
 console.log('Progress endpoint: GET /admin/backfill/{request_id} → check is_complete');
 console.log('Promotions endpoint: GET /api/v1/users/{id}/artifacts/promotions');
+console.log('💡 Backfill requests are cached in localStorage to prevent duplicates on refresh');
 
 // State management
 let currentEmail = '';
@@ -271,50 +272,95 @@ async function handleConnectedPage(grantId) {
     await sleep(500);
     
     try {
-        // Trigger backfill
-        updateLoadingText('Starting inbox scan...');
+        // Check for existing backfill request_id in localStorage
+        const storageKey = `backfill_${grantId}`;
+        let requestId = localStorage.getItem(storageKey);
+        let backfillStatus = null;
         
-        // Calculate date range (last 30 days)
-        const endDate = new Date();
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() - 30);
-        
-        const backfillResponse = await fetch(`${API_BASE_URL}/admin/backfill`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                user_id: grantId,
-                tenant_id: '00000000-0000-0000-0000-000000000000',
-                start_date: startDate.toISOString().split('T')[0],
-                end_date: endDate.toISOString().split('T')[0],
-                batch_size: 50
-            })
-        });
-        
-        if (!backfillResponse.ok) {
-            const errorText = await backfillResponse.text();
-            console.error('Backfill failed:', errorText);
-            throw new Error('Failed to start backfill');
+        // If we have a stored request_id, check its status
+        if (requestId) {
+            console.log(`📌 Found existing request_id: ${requestId}`);
+            updateLoadingText('Checking existing scan...');
+            
+            try {
+                const statusResponse = await fetch(`${API_BASE_URL}/admin/backfill/${requestId}`);
+                if (statusResponse.ok) {
+                    backfillStatus = await statusResponse.json();
+                    console.log('📊 Existing backfill status:', backfillStatus);
+                    
+                    // If backfill is complete or still processing, reuse it
+                    if (backfillStatus.is_complete || backfillStatus.status === 'processing' || backfillStatus.status === 'running') {
+                        console.log('✅ Reusing existing backfill request');
+                    } else {
+                        // If failed or invalid, clear it and create new one
+                        console.log('⚠️ Existing backfill invalid, creating new one');
+                        requestId = null;
+                        localStorage.removeItem(storageKey);
+                    }
+                } else {
+                    // Request not found, clear it
+                    console.log('⚠️ Existing request_id not found, creating new one');
+                    requestId = null;
+                    localStorage.removeItem(storageKey);
+                }
+            } catch (error) {
+                console.warn('Error checking existing backfill:', error);
+                requestId = null;
+                localStorage.removeItem(storageKey);
+            }
         }
         
-        const backfillData = await backfillResponse.json();
-        const requestId = backfillData.request_id;
-        
+        // If no valid existing request, create a new backfill
         if (!requestId) {
-            throw new Error('No request_id received from backfill');
+            updateLoadingText('Starting inbox scan...');
+            
+            // Calculate date range (last 30 days)
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 30);
+            
+            const backfillResponse = await fetch(`${API_BASE_URL}/admin/backfill`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    user_id: grantId,
+                    tenant_id: '00000000-0000-0000-0000-000000000000',
+                    start_date: startDate.toISOString().split('T')[0],
+                    end_date: endDate.toISOString().split('T')[0],
+                    batch_size: 50
+                })
+            });
+            
+            if (!backfillResponse.ok) {
+                const errorText = await backfillResponse.text();
+                console.error('Backfill failed:', errorText);
+                throw new Error('Failed to start backfill');
+            }
+            
+            const backfillData = await backfillResponse.json();
+            requestId = backfillData.request_id;
+            
+            if (!requestId) {
+                throw new Error('No request_id received from backfill');
+            }
+            
+            // Store request_id for future use
+            localStorage.setItem(storageKey, requestId);
+            console.log(`✅ New backfill started with request_id: ${requestId}`);
         }
         
-        console.log(`✅ Backfill started with request_id: ${requestId}`);
-        
-        // Poll backfill progress
+        // Poll backfill progress (whether new or existing)
         updateLoadingText('Scanning your inbox for deals...');
         await pollBackfillProgress(requestId);
         
         // Load promos
         updateLoadingText('Loading your deals...');
         await loadPromos(grantId);
+        
+        // Clear the stored request_id after successful completion
+        localStorage.removeItem(storageKey);
         
     } catch (error) {
         console.error('Error loading promos:', error);
